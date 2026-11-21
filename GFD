@@ -1,0 +1,230 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "Delta Bypass Attempt v4",
+   LoadingTitle = "กำลังโหลดสคริปต์...",
+   LoadingSubtitle = "Invisible + NPC Stun (1-100m)",
+   ConfigurationSaving = { Enabled = false }
+})
+
+local MainTab = Window:CreateTab("หลัก", 4483362458)
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+
+local InvisibleEnabled = false
+local NpcStunEnabled = false
+local StunRadius = 100
+
+local SavedCharacterProps = {}
+local StunnedTargets = {} -- [model] = { origin = CFrame, hum = Humanoid? }
+
+-- ==========================================
+-- 1. ล่องหน (ซ่อนภาพ + ปิดเงา + ปิด CanQuery ฝั่งเครื่อง)
+-- ==========================================
+local function setInvisible(char, enabled)
+    if not char then return end
+
+    if enabled then
+        table.clear(SavedCharacterProps)
+
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                if obj.Name ~= "HumanoidRootPart" then
+                    SavedCharacterProps[obj] = {
+                        Type = "Part",
+                        Transparency = obj.Transparency,
+                        CastShadow = obj.CastShadow,
+                        CanQuery = obj.CanQuery,
+                        LocalTransparencyModifier = obj.LocalTransparencyModifier
+                    }
+                    obj.Transparency = 1
+                    obj.CastShadow = false
+                    obj.CanQuery = false
+                    pcall(function()
+                        obj.LocalTransparencyModifier = 1
+                    end)
+                end
+            elseif obj:IsA("Decal") then
+                SavedCharacterProps[obj] = {
+                    Type = "Decal",
+                    Transparency = obj.Transparency
+                }
+                obj.Transparency = 1
+            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Highlight") or obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+                SavedCharacterProps[obj] = {
+                    Type = "Toggle",
+                    Enabled = obj.Enabled
+                }
+                obj.Enabled = false
+            end
+        end
+    else
+        for obj, data in pairs(SavedCharacterProps) do
+            if obj and obj.Parent then
+                pcall(function()
+                    if data.Type == "Part" then
+                        obj.Transparency = data.Transparency
+                        obj.CastShadow = data.CastShadow
+                        obj.CanQuery = data.CanQuery
+                        obj.LocalTransparencyModifier = data.LocalTransparencyModifier
+                    elseif data.Type == "Decal" then
+                        obj.Transparency = data.Transparency
+                    elseif data.Type == "Toggle" then
+                        obj.Enabled = data.Enabled
+                    end
+                end)
+            end
+        end
+        table.clear(SavedCharacterProps)
+    end
+end
+
+MainTab:CreateToggle({
+   Name = "1. ล่องหน (Invisible)",
+   CurrentValue = false,
+   Callback = function(Value)
+       InvisibleEnabled = Value
+       setInvisible(LocalPlayer.Character, Value)
+   end,
+})
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    char:WaitForChild("HumanoidRootPart")
+    task.wait(0.4)
+    if InvisibleEnabled then
+        setInvisible(char, true)
+    end
+end)
+
+-- ==========================================
+-- 2. สตั๊น NPC / ตำรวจ / ยาม ในระยะ 1 - 100 เมตร
+-- ==========================================
+local function getTargetRoot(model)
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Head")
+        or model.PrimaryPart
+        or model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function releaseTarget(model)
+    local info = StunnedTargets[model]
+    if info and info.hum and info.hum.Parent then
+        pcall(function()
+            info.hum.PlatformStand = false
+            info.hum.WalkSpeed = 16
+            info.hum.JumpPower = 50
+            if info.hum:GetState() == Enum.HumanoidStateType.Physics then
+                info.hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end)
+    end
+    StunnedTargets[model] = nil
+end
+
+local function releaseAllTargets()
+    for model in pairs(StunnedTargets) do
+        releaseTarget(model)
+    end
+    table.clear(StunnedTargets)
+end
+
+MainTab:CreateSlider({
+   Name = "ระยะสตั๊น (1 - 100 เมตร)",
+   Range = {1, 100},
+   Increment = 1,
+   Suffix = "m",
+   CurrentValue = 100,
+   Callback = function(Value)
+       StunRadius = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "2. สตั๊น NPC / ตำรวจ / ยาม ในระยะ",
+   CurrentValue = false,
+   Callback = function(Value)
+       NpcStunEnabled = Value
+       if not Value then
+           releaseAllTargets()
+       end
+   end,
+})
+
+MainTab:CreateButton({
+   Name = "เช็กจำนวนเป้าหมายที่กำลังโดนสตั๊น",
+   Callback = function()
+       local count = 0
+       for _ in pairs(StunnedTargets) do
+           count += 1
+       end
+       Rayfield:Notify({
+           Title = "สถานะการสตั๊น",
+           Content = "กำลังจับเป้าหมายอยู่: " .. count .. " ตัว (ระยะ " .. StunRadius .. "m)",
+           Duration = 3
+       })
+   end,
+})
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if NpcStunEnabled then
+            pcall(function()
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+
+                local seenModels = {}
+
+                for _, model in ipairs(Workspace:GetDescendants()) do
+                    if model:IsA("Model") and not Players:GetPlayerFromCharacter(model) then
+                        local hum = model:FindFirstChildOfClass("Humanoid")
+                        local animCtrl = model:FindFirstChildOfClass("AnimationController")
+                        local root = getTargetRoot(model)
+
+                        if root and (hum or animCtrl) then
+                            local alive = (not hum) or (hum.Health > 0)
+                            if alive then
+                                local dist = (root.Position - hrp.Position).Magnitude
+                                if dist <= StunRadius then
+                                    seenModels[model] = true
+
+                                    if not StunnedTargets[model] then
+                                        StunnedTargets[model] = {
+                                            origin = root.CFrame,
+                                            hum = hum
+                                        }
+                                    end
+
+                                    if hum then
+                                        hum.PlatformStand = true
+                                        hum.WalkSpeed = 0
+                                        hum.JumpPower = 0
+                                        if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+                                            hum:ChangeState(Enum.HumanoidStateType.Physics)
+                                        end
+                                    end
+
+                                    pcall(function()
+                                        root.AssemblyLinearVelocity = Vector3.zero
+                                        root.AssemblyAngularVelocity = Vector3.zero
+                                        root.CFrame = StunnedTargets[model].origin
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                for model in pairs(StunnedTargets) do
+                    if not seenModels[model] then
+                        releaseTarget(model)
+                    end
+                end
+            end)
+        end
+    end
+end)
